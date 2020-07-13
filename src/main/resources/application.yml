@@ -4,8 +4,8 @@ server:
     context-path: /voice
 spring:
   mvc:
+    static-path-pattern: /resources/**
     view:
       prefix: /
       suffix: .html
-    static-path-pattern: /**
 
