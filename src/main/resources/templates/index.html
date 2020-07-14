@@ -214,6 +214,8 @@
 </body>
 
 <script type="text/javascript">
+
+
     let countInterval = null
     const worker = AudioWorker()
     const reader = Reader({
@@ -263,9 +265,9 @@
     }
     $('#taste_button, .taste-button').click(function () {
         if (reader.status === 'ing') {
-            reader.stopListen()
+            reader.stop()
         } else {
-            reader.startListen()
+            reader.start()
         }
     })
 </script>

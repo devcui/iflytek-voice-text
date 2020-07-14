@@ -1,226 +1,100 @@
-const url = "wss://iat-api.xfyun.cn/v2/iat?authorization=YXBpX2tleT0iMjBmM2ZkNWI4N2U4YTM3MzE3M2FjYmU5ZjliYmEwODMiLCBhbGdvcml0aG09ImhtYWMtc2hhMjU2IiwgaGVhZGVycz0iaG9zdCBkYXRlIHJlcXVlc3QtbGluZSIsIHNpZ25hdHVyZT0idTR1Y0h6RTE0WjVvYU5wdFFaODArbTVUNkxrSWlmUGdxNDdaU1VIY3hwVT0i&date=Mon, 13 Jul 2020 12:50:28 GMT&host=iat-api.xfyun.cn";
+const url = "wss://iat-api.xfyun.cn/v2/iat?authorization=YXBpX2tleT0iMjBmM2ZkNWI4N2U4YTM3MzE3M2FjYmU5ZjliYmEwODMiLCBhbGdvcml0aG09ImhtYWMtc2hhMjU2IiwgaGVhZGVycz0iaG9zdCBkYXRlIHJlcXVlc3QtbGluZSIsIHNpZ25hdHVyZT0iT2hyZVVZWjlucEpaNVE3MVdIREFDYTR1bHRtbEpmZjljTGVINnJDb21YZz0i&date=Tue,%2014%20Jul%202020%2001:20:53%20GMT&host=iat-api.xfyun.cn"
 
-const Reader = ({lang, accent, appId, audioWorker}) => {
-    const reader = {
-        status: 'null',
-        language: lang || 'zh-cn',
-        accent: accent || 'mandarin',
-        appId: appId || '5efa9b44',
-        audioData: [],
-        resultText: '',
-        resultTextTemp: '',
-        audioWorker: audioWorker || null,
-        audioContext: null,
-        scriptProcessor: null,
-        mediaSource: null,
-        webSocket: null,
-    };
-
-    reader.setResultText = ({resultText, resultTextTemp} = {}) => {
-        reader.onTextChange && reader.onTextChange(resultTextTemp || resultText || '');
-        resultText !== undefined && (reader.resultText = resultText);
-        resultTextTemp !== undefined && (reader.resultTextTemp = resultTextTemp)
-    };
-
-    reader.toBase64 = (buffer) => {
-        let binary = '';
-        const bytes = new Uint8Array(buffer);
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i])
+class IatRecorder {
+    constructor({lang, accent, appId, audioWorker}) {
+        this.status = 'null'
+        this.language = lang || 'zh_cn'
+        this.accent = accent || 'mandarin'
+        this.appId = appId || '5efa9b44'
+        this.audioData = []
+        this.resultText = ''
+        this.resultTextTemp = ''
+        audioWorker.onmessage = (event) => {
+            console.log(event);
+            this.audioData.push(...event)
         }
-        return window.btoa(binary)
-    };
+        this.transWorker = audioWorker
+    }
 
-    reader.webSocketSend = () => {
-        if (reader.webSocket.readyState !== 1) {
-            return
-        }
-        let audioData = reader.audioData.splice(0, 1280);
-        const params = {
-            common: {
-                app_id: reader.appId,
-            },
-            business: {
-                language: reader.language, //小语种可在控制台--语音听写（流式）--方言/语种处添加试用
-                domain: 'iat',
-                accent: reader.accent, //中文方言可在控制台--语音听写（流式）--方言/语种处添加试用
-                vad_eos: 5000,
-                dwa: 'wpgs', //为使该功能生效，需到控制台开通动态修正功能（该功能免费）
-            },
-            data: {
-                status: 0,
-                format: 'audio/L16;rate=16000',
-                encoding: 'raw',
-                audio: reader.toBase64(audioData),
-            },
-        };
-        reader.webSocket.send(JSON.stringify(params));
-        this.handlerInterval = setInterval(() => {
-            // websocket未连接
-            if (reader.webSocket.readyState !== 1) {
-                reader.audioData = [];
-                clearInterval(this.handlerInterval);
-                return
-            }
-            if (reader.audioData.length === 0) {
-                if (reader.status === 'end') {
-                    reader.webSocket.send(
-                        JSON.stringify({
-                            data: {
-                                status: 2,
-                                format: 'audio/L16;rate=16000',
-                                encoding: 'raw',
-                                audio: '',
-                            },
-                        })
-                    );
-                    reader.audioData = [];
-                    clearInterval(this.handlerInterval)
-                }
-                return false
-            }
-            audioData = reader.audioData.splice(0, 1280);
-            // 中间帧
-            reader.webSocket.send(
-                JSON.stringify({
-                    data: {
-                        status: 1,
-                        format: 'audio/L16;rate=16000',
-                        encoding: 'raw',
-                        audio: reader.toBase64(audioData),
-                    },
-                })
-            )
-        }, 40)
-    };
-    reader.result = (resultData) => {
-        // 识别结束
-        let jsonData = JSON.parse(resultData);
-        if (jsonData.data && jsonData.data.result) {
-            let data = jsonData.data.result;
-            let str = '';
-            let ws = data.ws;
-            for (let i = 0; i < ws.length; i++) {
-                str = str + ws[i].cw[0].w
-            }
-            // 开启wpgs会有此字段(前提：在控制台开通动态修正功能)
-            // 取值为 "apd"时表示该片结果是追加到前面的最终结果；取值为"rpl" 时表示替换前面的部分结果，替换范围为rg字段
-            if (data.pgs) {
-                if (data.pgs === 'apd') {
-                    // 将resultTextTemp同步给resultText
-                    reader.setResultText({
-                        resultText: reader.resultTextTemp,
-                    })
-                }
-                // 将结果存储在resultTextTemp中
-                reader.setResultText({
-                    resultTextTemp: reader.resultText + str,
-                })
-            } else {
-                reader.setResultText({
-                    resultText: reader.resultText + str,
-                })
-            }
-        }
-        if (jsonData.code === 0 && jsonData.data.status === 2) {
-            reader.webSocket.close()
-        }
-        if (jsonData.code !== 0) {
-            reader.webSocket.close();
-            console.log(`${jsonData.code}:${jsonData.message}`)
-        }
-    };
+    // 修改录音听写状态
+    setStatus = (status) => {
+        this.onWillStatusChange && this.status !== status && this.onWillStatusChange(this.status, status)
+        this.status = status
+    }
 
-    reader.setStatus = (status) => {
-        reader.onWillStatusChange && reader.status !== status && reader.onWillStatusChange(this.status, status);
-        reader.status = status
-    };
+    setResultText = ({resultText, resultTextTemp} = {}) => {
+        this.onTextChange && this.onTextChange(resultTextTemp || resultText || '')
+        resultText !== undefined && (this.resultText = resultText)
+        resultTextTemp !== undefined && (this.resultTextTemp = resultTextTemp)
+    }
 
-    reader.connectWebSocket = () => {
+    // 修改听写参数
+    setParams = ({language, accent} = {}) => {
+        language && (this.language = language)
+        accent && (this.accent = accent)
+    }
+
+    // 连接websocket
+    connectWebSocket() {
+        let iatWS
         if ('WebSocket' in window) {
-            reader.webSocket = new WebSocket(url)
+            iatWS = new WebSocket(url)
         } else if ('MozWebSocket' in window) {
-            reader.webSocket = new MozWebSocket(url)
+            iatWS = new MozWebSocket(url)
         } else {
-            alert('浏览器不支持WebSocket');
+            alert('浏览器不支持WebSocket')
             return
         }
-        reader.setStatus("init");
-        reader.webSocket.onopen = (e) => {
-            reader.setStatus('ing');
+        this.webSocket = iatWS
+        this.setStatus('init')
+        iatWS.onopen = e => {
+            this.setStatus('ing')
             // 重新开始录音
             setTimeout(() => {
-                reader.webSocketSend()
+                this.webSocketSend()
             }, 500)
-        };
-        reader.webSocket.onmessage = e => {
-            reader.result(e.data)
-        };
-        reader.webSocket.onerror = e => {
-            reader.recorderStop()
-        };
-        reader.webSocket.onclose = e => {
-            reader.recorderStop()
         }
-    };
-
-    reader.recorderInit = () => {
-        getMediaSuccess = (stream) => {
-            console.log('getMediaSuccess')
-            console.log(stream)
-            // 创建一个用于通过JavaScript直接处理音频
-            this.scriptProcessor = reader.audioContext.createScriptProcessor(0, 1, 1)
-            this.scriptProcessor.onaudioprocess = e => {
-                console.log(e)
-                // 去处理音频数据
-                if (this.status === 'ing') {
-                    console.log(e.inputBuffer.getChannelData(0))
-                    reader.audioWorker.onmessage(e.inputBuffer.getChannelData(0))
-                }
-            }
-            // 创建一个新的MediaStreamAudioSourceNode 对象，使来自MediaStream的音频可以被播放和操作
-            this.mediaSource = reader.audioContext.createMediaStreamSource(stream)
-            // 连接
-            this.mediaSource.connect(this.scriptProcessor)
-            this.scriptProcessor.connect(reader.audioContext.destination)
-            reader.connectWebSocket()
-        };
-
-        getMediaFail = (e) => {
-            alert('请求麦克风失败');
-            console.log(e)
-            reader.audioContext && reader.audioContext.close();
-            reader.audioContext = undefined;
-            // 关闭websocket
-            if (reader.webSocket && reader.webSocket.readyState === 1) {
-                reader.webSocket.close()
-            }
+        iatWS.onmessage = e => {
+            this.result(e.data)
         }
-        navigator.getUserMedia = navigator.getUserMedia ||
+        iatWS.onerror = e => {
+            this.recorderStop()
+        }
+        iatWS.onclose = e => {
+            this.recorderStop()
+        }
+    }
+
+    // 初始化浏览器录音
+    recorderInit = () => {
+        navigator.getUserMedia =
+            navigator.getUserMedia ||
             navigator.webkitGetUserMedia ||
             navigator.mozGetUserMedia ||
-            navigator.msGetUserMedia;
+            navigator.msGetUserMedia
 
+        // 创建音频环境
         try {
-            reader.audioContext = new (window.AudioContext || window.webkitAudioContext)()
-            reader.audioContext.resume();
-            if (!reader.audioContext) {
-                alert("浏览器不支持WebAudioAPI接口!");
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
+            this.audioContext.resume()
+            if (!this.audioContext) {
+                alert('浏览器不支持webAudioApi相关接口')
                 return
             }
         } catch (e) {
-            if (!reader.audioContext) {
-                alert("浏览器不支持WebAudioAPI接口!");
+            if (!this.audioContext) {
+                alert('浏览器不支持webAudioApi相关接口')
                 return
             }
         }
 
+        // 获取浏览器录音权限
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            navigator.mediaDevices.getUserMedia({
-                audio: true,
-                video: false
-            })
+            navigator.mediaDevices
+                .getUserMedia({
+                    audio: true,
+                    video: false,
+                })
                 .then(stream => {
                     getMediaSuccess(stream)
                 })
@@ -228,7 +102,8 @@ const Reader = ({lang, accent, appId, audioWorker}) => {
                     getMediaFail(e)
                 })
         } else if (navigator.getUserMedia) {
-            navigator.getUserMedia({
+            navigator.getUserMedia(
+                {
                     audio: true,
                     video: false,
                 },
@@ -245,41 +120,185 @@ const Reader = ({lang, accent, appId, audioWorker}) => {
             } else {
                 alert('无法获取浏览器录音功能，请升级浏览器或使用chrome')
             }
-            reader.audioContext && reader.audioContext.close();
+            this.audioContext && this.audioContext.close()
+            return
         }
-    };
-
-
-    reader.audioData.onmessage = (event) => {
-        reader.audioData.push(...event.data)
-    };
-
-    reader.recorderStart = () => {
-        if (!reader.audioContext) {
-            reader.recorderInit();
-        } else {
-            reader.audioContext.resume();
-            reader.connectWebSocket()
+        // 获取浏览器录音权限成功的回调
+        let getMediaSuccess = stream => {
+            console.log('getMediaSuccess')
+            // 创建一个用于通过JavaScript直接处理音频
+            this.scriptProcessor = this.audioContext.createScriptProcessor(0, 1, 1)
+            this.scriptProcessor.onaudioprocess = e => {
+                // 去处理音频数据
+                if (this.status === 'ing') {
+                    console.log(e.inputBuffer.getChannelData(0))
+                    this.transWorker.transCode(e.inputBuffer.getChannelData(0))
+                }
+            }
+            // 创建一个新的MediaStreamAudioSourceNode 对象，使来自MediaStream的音频可以被播放和操作
+            this.mediaSource = this.audioContext.createMediaStreamSource(stream)
+            // 连接
+            this.mediaSource.connect(this.scriptProcessor)
+            this.scriptProcessor.connect(this.audioContext.destination)
+            this.connectWebSocket()
         }
-    };
 
-
-    reader.startListen = () => {
-        reader.recorderStart();
-        reader.setResultText({
-            resultText: '',
-            resultTextTemp: ''
-        })
-    };
-
-    reader.stopListen = () => {
-        reader.recorderStop()
-    };
-    reader.recorderStop = () => {
-        if (!(/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgen))) {
-            reader.audioContext && reader.audioContext.suspend()
+        let getMediaFail = (e) => {
+            alert('请求麦克风失败')
+            console.log(e)
+            this.audioContext && this.audioContext.close()
+            this.audioContext = undefined
+            // 关闭websocket
+            if (this.webSocket && this.webSocket.readyState === 1) {
+                this.webSocket.close()
+            }
         }
-        reader.setStatus('end')
     }
-    return reader;
+
+    recorderStart() {
+        if (!this.audioContext) {
+            this.recorderInit()
+        } else {
+            this.audioContext.resume()
+            this.connectWebSocket()
+        }
+    }
+
+    // 暂停录音
+    recorderStop() {
+        // safari下suspend后再次resume录音内容将是空白，设置safari下不做suspend
+        if (!(/Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgen))) {
+            this.audioContext && this.audioContext.suspend()
+        }
+        this.setStatus('end')
+    }
+
+    // 对处理后的音频数据进行base64编码，
+    toBase64(buffer) {
+        var binary = ''
+        var bytes = new Uint8Array(buffer)
+        var len = bytes.byteLength
+        for (var i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i])
+        }
+        return window.btoa(binary)
+    }
+
+    // 向webSocket发送数据
+    webSocketSend() {
+        if (this.webSocket.readyState !== 1) {
+            return
+        }
+        let audioData = this.audioData.splice(0, 1280)
+        var params = {
+            common: {
+                app_id: this.appId,
+            },
+            business: {
+                language: this.language, //小语种可在控制台--语音听写（流式）--方言/语种处添加试用
+                domain: 'iat',
+                accent: this.accent, //中文方言可在控制台--语音听写（流式）--方言/语种处添加试用
+                vad_eos: 5000,
+                dwa: 'wpgs', //为使该功能生效，需到控制台开通动态修正功能（该功能免费）
+            },
+            data: {
+                status: 0,
+                format: 'audio/L16;rate=16000',
+                encoding: 'raw',
+                audio: this.toBase64(audioData),
+            },
+        }
+        this.webSocket.send(JSON.stringify(params))
+        this.handlerInterval = setInterval(() => {
+            // websocket未连接
+            if (this.webSocket.readyState !== 1) {
+                this.audioData = []
+                clearInterval(this.handlerInterval)
+                return
+            }
+            if (this.audioData.length === 0) {
+                if (this.status === 'end') {
+                    this.webSocket.send(
+                        JSON.stringify({
+                            data: {
+                                status: 2,
+                                format: 'audio/L16;rate=16000',
+                                encoding: 'raw',
+                                audio: '',
+                            },
+                        })
+                    )
+                    this.audioData = []
+                    clearInterval(this.handlerInterval)
+                }
+                return false
+            }
+            audioData = this.audioData.splice(0, 1280)
+            // 中间帧
+            this.webSocket.send(
+                JSON.stringify({
+                    data: {
+                        status: 1,
+                        format: 'audio/L16;rate=16000',
+                        encoding: 'raw',
+                        audio: this.toBase64(audioData),
+                    },
+                })
+            )
+        }, 40)
+    }
+
+    result(resultData) {
+        // 识别结束
+        let jsonData = JSON.parse(resultData)
+        if (jsonData.data && jsonData.data.result) {
+            let data = jsonData.data.result
+            let str = ''
+            let resultStr = ''
+            let ws = data.ws
+            for (let i = 0; i < ws.length; i++) {
+                str = str + ws[i].cw[0].w
+            }
+            // 开启wpgs会有此字段(前提：在控制台开通动态修正功能)
+            // 取值为 "apd"时表示该片结果是追加到前面的最终结果；取值为"rpl" 时表示替换前面的部分结果，替换范围为rg字段
+            if (data.pgs) {
+                if (data.pgs === 'apd') {
+                    // 将resultTextTemp同步给resultText
+                    this.setResultText({
+                        resultText: this.resultTextTemp,
+                    })
+                }
+                // 将结果存储在resultTextTemp中
+                this.setResultText({
+                    resultTextTemp: this.resultText + str,
+                })
+            } else {
+                this.setResultText({
+                    resultText: this.resultText + str,
+                })
+            }
+        }
+        if (jsonData.code === 0 && jsonData.data.status === 2) {
+            this.webSocket.close()
+        }
+        if (jsonData.code !== 0) {
+            this.webSocket.close()
+            console.log(`${jsonData.code}:${jsonData.message}`)
+        }
+    }
+
+    start() {
+        this.recorderStart()
+        this.setResultText({resultText: '', resultTextTemp: ''})
+    }
+
+    stop() {
+        this.recorderStop()
+    }
+
+}
+
+const Reader = ({lang, accent, appId, audioWorker}) => {
+    return new IatRecorder({lang, accent, appId, audioWorker})
 };
+
